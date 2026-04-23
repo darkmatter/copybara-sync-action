@@ -14,7 +14,9 @@ jobs:
       - name: Resolve copybara ref to SHA
         id: resolve
         run: |
-          SHA=$(git ls-remote https://github.com/google/copybara master | awk '{print $1}' | head -n1)
+          # Pin to the same SHA the action defaults to so CI is reproducible
+          # and doesn't break when google/copybara master moves.
+          SHA="a443f79f490d2b07e40e0b76d82e6d46f64632bf"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Cache copybara_deploy.jar

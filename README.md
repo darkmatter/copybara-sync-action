@@ -105,14 +105,27 @@ hooks), use `path` to point at a hand-authored `copy.bara.sky`.
 ## Caching and the `version` input
 
 Google does not publish stable copybara releases — `master` is the canonical
-ref. The action resolves the value of `version` to a SHA via
+ref. The action resolves `version` to a SHA via
 `git ls-remote https://github.com/google/copybara`, keys the cache on that
 SHA, and only rebuilds when the SHA changes.
+
+The `version` input **defaults to a pinned, known-good SHA** rather than
+`master`, so a copybara HEAD that breaks the build (e.g. a JDK source-level
+bump) does not break this action's consumers. Bump the pin in `action.yml`
+when you intentionally want to track a newer copybara.
 
 A cold-cache build takes roughly 5–10 minutes on a `ubuntu-latest` runner.
 Cached runs skip the build entirely.
 
-To pin to a known-good copybara revision, pass an explicit SHA:
+To track copybara HEAD instead:
+
+```yaml
+- uses: darkmatter/copybara-sync-action@v1
+  with:
+    version: master
+```
+
+Or pin to a different SHA:
 
 ```yaml
 - uses: darkmatter/copybara-sync-action@v1

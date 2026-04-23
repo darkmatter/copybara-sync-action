@@ -49,9 +49,9 @@ inputs:
     required: false
     default: "[]"
   version:
-    description: "google/copybara git ref (branch, tag, or SHA) to build from"
+    description: "google/copybara git ref (branch, tag, or SHA) to build from. Defaults to a known-good SHA; override with 'master' to track HEAD."
     required: false
-    default: "master"
+    default: "a443f79f490d2b07e40e0b76d82e6d46f64632bf"
   github_token:
     description: "GitHub token with write access to the destination repo (used for HTTPS auth)"
     required: false
