@@ -1,0 +1,148 @@
+name: Copybara Sync
+description: >
+  Sync one git repository into another using Google Copybara, without Docker.
+  Builds copybara from source on cache miss, then runs `java -jar`.
+
+inputs:
+  path:
+    description: "Path to a copy.bara.sky file in the caller's repo. If set, all other generation inputs are ignored."
+    required: false
+    default: ""
+  raw:
+    description: "Inlined copy.bara.sky contents. If set, all other generation inputs are ignored (path takes precedence over raw)."
+    required: false
+    default: ""
+  origin_url:
+    description: "Origin git repository URL"
+    required: false
+    default: ""
+  origin_ref:
+    description: "Origin ref/branch"
+    required: false
+    default: "main"
+  dest_url:
+    description: "Destination git repository URL"
+    required: false
+    default: ""
+  dest_fetch:
+    description: "Destination ref to fetch"
+    required: false
+    default: "main"
+  dest_push:
+    description: "Destination ref to push"
+    required: false
+    default: "main"
+  dest_files_globs:
+    description: "JSON array of globs to include in destination_files (also used for origin_files)"
+    required: false
+    default: '["**"]'
+  dest_files_excludes:
+    description: "JSON array of globs to exclude from destination_files (also used for origin_files)"
+    required: false
+    default: '[]'
+  author:
+    description: 'Authoring string, e.g. "Copybara Bot <bot@example.com>"'
+    required: false
+    default: ""
+  transformations:
+    description: "JSON array of Copybara transformation Starlark expressions"
+    required: false
+    default: "[]"
+  version:
+    description: "google/copybara git ref (branch, tag, or SHA) to build from"
+    required: false
+    default: "master"
+  github_token:
+    description: "GitHub token with write access to the destination repo (used for HTTPS auth)"
+    required: false
+    default: ""
+  ssh_key:
+    description: "SSH private key with write access to the destination repo"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Generate copy.bara.sky
+      shell: bash
+      env:
+        INPUTS_JSON: ${{ toJSON(inputs) }}
+      run: |
+        printf '%s' "$INPUTS_JSON" | "${{ github.action_path }}/scripts/generate_sky.sh" > copy.bara.sky
+        echo '--- copy.bara.sky ---'
+        cat copy.bara.sky
+
+    - name: Resolve copybara ref to SHA
+      id: resolve
+      shell: bash
+      env:
+        REF: ${{ inputs.version }}
+      run: |
+        SHA=$(git ls-remote https://github.com/google/copybara "$REF" | awk '{print $1}' | head -n1)
+        if [ -z "$SHA" ]; then
+          # Fall back to treating the input as a SHA.
+          SHA="$REF"
+        fi
+        echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+    - name: Cache copybara_deploy.jar
+      id: cache-jar
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/copybara/copybara_deploy.jar
+        key: copybara-jar-${{ runner.os }}-${{ steps.resolve.outputs.sha }}
+
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - name: Build copybara from source
+      if: steps.cache-jar.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SHA: ${{ steps.resolve.outputs.sha }}
+      run: |
+        sudo curl -fsSL -o /usr/local/bin/bazel \
+          https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+        sudo chmod +x /usr/local/bin/bazel
+
+        git clone https://github.com/google/copybara /tmp/copybara-src
+        git -C /tmp/copybara-src checkout "$SHA"
+        (cd /tmp/copybara-src && bazel build //java/com/google/copybara:copybara_deploy.jar)
+
+        mkdir -p "$RUNNER_TOOL_CACHE/copybara"
+        cp /tmp/copybara-src/bazel-bin/java/com/google/copybara/copybara_deploy.jar \
+           "$RUNNER_TOOL_CACHE/copybara/copybara_deploy.jar"
+
+    - name: Configure git identity and credentials
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        SSH_KEY: ${{ inputs.ssh_key }}
+        AUTHOR: ${{ inputs.author }}
+      run: |
+        NAME=$(printf '%s' "$AUTHOR" | sed -E 's/[[:space:]]*<[^>]*>[[:space:]]*$//')
+        EMAIL=$(printf '%s' "$AUTHOR" | sed -nE 's/.*<([^>]+)>.*/\1/p')
+        git config --global user.name  "${NAME:-Copybara}"
+        git config --global user.email "${EMAIL:-copybara@users.noreply.github.com}"
+
+        if [ -n "$GH_TOKEN" ]; then
+          printf 'https://x-access-token:%s@github.com\n' "$GH_TOKEN" > "$HOME/.git-credentials"
+          git config --global credential.helper store
+        fi
+
+        if [ -n "$SSH_KEY" ]; then
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_rsa"
+          chmod 600 "$HOME/.ssh/id_rsa"
+          ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+        fi
+
+    - name: Run Copybara
+      shell: bash
+      run: |
+        java -jar "$RUNNER_TOOL_CACHE/copybara/copybara_deploy.jar" \
+          migrate copy.bara.sky default --init-history --force

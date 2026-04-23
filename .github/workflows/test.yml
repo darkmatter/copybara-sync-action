@@ -1,0 +1,81 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve copybara ref to SHA
+        id: resolve
+        run: |
+          SHA=$(git ls-remote https://github.com/google/copybara master | awk '{print $1}' | head -n1)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Cache copybara_deploy.jar
+        id: cache-jar
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/copybara/copybara_deploy.jar
+          key: copybara-jar-${{ runner.os }}-${{ steps.resolve.outputs.sha }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build copybara from source
+        if: steps.cache-jar.outputs.cache-hit != 'true'
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          sudo chmod +x /usr/local/bin/bazel
+
+          git clone https://github.com/google/copybara /tmp/copybara-src
+          git -C /tmp/copybara-src checkout "$SHA"
+          (cd /tmp/copybara-src && bazel build //java/com/google/copybara:copybara_deploy.jar)
+
+          mkdir -p "$RUNNER_TOOL_CACHE/copybara"
+          cp /tmp/copybara-src/bazel-bin/java/com/google/copybara/copybara_deploy.jar \
+             "$RUNNER_TOOL_CACHE/copybara/copybara_deploy.jar"
+
+      - name: Run generator tests
+        env:
+          COPYBARA_JAR: ${{ runner.tool_cache }}/copybara/copybara_deploy.jar
+        run: scripts/test_generate_sky.sh
+
+  smoke-test-action:
+    name: Smoke test action against itself
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up local source repo
+        id: srcrepo
+        run: |
+          SRC=$(mktemp -d)/src
+          DST=$(mktemp -d)/dst.git
+          git init -q -b main "$SRC"
+          git -C "$SRC" config user.email t@t.t
+          git -C "$SRC" config user.name "Test"
+          echo hello > "$SRC/README.md"
+          git -C "$SRC" add -A
+          git -C "$SRC" -c commit.gpgsign=false commit -q -m init
+          git init -q --bare -b main "$DST"
+          echo "src=file://$SRC" >> "$GITHUB_OUTPUT"
+          echo "dst=file://$DST" >> "$GITHUB_OUTPUT"
+
+      - name: Sync
+        uses: ./
+        with:
+          origin_url: ${{ steps.srcrepo.outputs.src }}
+          dest_url:   ${{ steps.srcrepo.outputs.dst }}
+          author:     "Action Smoke Test <smoke@test.local>"
