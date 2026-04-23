@@ -97,7 +97,7 @@ runs:
       uses: actions/setup-java@v4
       with:
         distribution: temurin
-        java-version: "17"
+        java-version: "21"
 
     - name: Build copybara from source
       if: steps.cache-jar.outputs.cache-hit != 'true'
